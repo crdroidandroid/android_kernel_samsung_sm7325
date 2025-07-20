@@ -4,7 +4,7 @@
 #include <linux/types.h>
 #include <linux/workqueue.h>
 
-#define KERNEL_SU_VERSION 11602
+#define KERNEL_SU_VERSION 12797
 #define KERNEL_SU_OPTION 0xDEADBEEF
 
 #define CMD_GRANT_ROOT 0
@@ -23,7 +23,9 @@
 #define CMD_UID_SHOULD_UMOUNT 13
 #define CMD_IS_SU_ENABLED 14
 #define CMD_ENABLE_SU 15
-#define CMD_HOOK_MODE 16
+#define CMD_GET_MANAGER_UID 16
+
+#define CMD_HOOK_MODE 0xC0DEAD1A
 
 #define EVENT_POST_FS_DATA 1
 #define EVENT_BOOT_COMPLETED 2
