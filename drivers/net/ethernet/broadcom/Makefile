@@ -18,4 +18,5 @@ obj-$(CONFIG_BNXT) += bnxt/
 
 # FIXME: temporarily silence -Warray-bounds on non W=1+ builds
 ifndef KBUILD_EXTRA_WARN
+CFLAGS_tg3.o += -Wno-array-bounds
 endif

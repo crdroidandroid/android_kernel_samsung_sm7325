@@ -401,8 +401,8 @@ int adreno_iommu_set_pt_ctx(struct adreno_ringbuffer *rb,
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct kgsl_pagetable *cur_pt = device->mmu.defaultpagetable;
 	unsigned int *cmds = NULL, count = 0;
- 	int result = 0;
- 
+	int result = 0;
+
 	cmds = kmalloc(PAGE_SIZE, GFP_KERNEL);
 	if (cmds == NULL)
 		return -ENOMEM;

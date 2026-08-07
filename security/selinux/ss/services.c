@@ -962,7 +962,10 @@ void services_compute_xperms_decision(struct extended_perms_decision *xpermd,
 					xpermd->driver))
 			return;
 	} else {
-		BUG();
+		pr_warn_once(
+			"SELinux: unknown extended permission (%u) will be ignored\n",
+			node->datum.u.xperms->specified);
+		return;
 	}
 
 	if (node->key.specified == AVTAB_XPERMS_ALLOWED) {
@@ -999,7 +1002,8 @@ void services_compute_xperms_decision(struct extended_perms_decision *xpermd,
 					node->datum.u.xperms->perms.p[i];
 		}
 	} else {
-		BUG();
+		pr_warn_once("SELinux: unknown specified key (%u)\n",
+			     node->key.specified);
 	}
 }
 
@@ -1275,6 +1279,12 @@ static int context_struct_to_string(struct policydb *p,
 int security_sidtab_hash_stats(struct selinux_state *state, char *page)
 {
 	int rc;
+
+	if (!selinux_initialized(state)) {
+		pr_err("SELinux: %s:  called before initial load_policy\n",
+		       __func__);
+		return -EINVAL;
+	}
 
 	read_lock(&state->ss->policy_rwlock);
 	rc = sidtab_hash_stats(state->ss->sidtab, page);

@@ -164,18 +164,18 @@ int __weak kgdb_arch_set_breakpoint(struct kgdb_bkpt *bpt)
 {
 	int err;
 
-	err = probe_kernel_read(bpt->saved_instr, (char *)bpt->bpt_addr,
+	err = copy_from_kernel_nofault(bpt->saved_instr, (char *)bpt->bpt_addr,
 				BREAK_INSTR_SIZE);
 	if (err)
 		return err;
-	err = probe_kernel_write((char *)bpt->bpt_addr,
+	err = copy_to_kernel_nofault((char *)bpt->bpt_addr,
 				 arch_kgdb_ops.gdb_bpt_instr, BREAK_INSTR_SIZE);
 	return err;
 }
 
 int __weak kgdb_arch_remove_breakpoint(struct kgdb_bkpt *bpt)
 {
-	return probe_kernel_write((char *)bpt->bpt_addr,
+	return copy_to_kernel_nofault((char *)bpt->bpt_addr,
 				  (char *)bpt->saved_instr, BREAK_INSTR_SIZE);
 }
 
@@ -944,6 +944,9 @@ void kgdb_panic(const char *msg)
 	 */
 	if (panic_timeout)
 		return;
+
+	debug_locks_off();
+	console_flush_on_panic(CONSOLE_FLUSH_PENDING);
 
 	if (dbg_kdb_mode)
 		kdb_printf("PANIC: %s\n", msg);

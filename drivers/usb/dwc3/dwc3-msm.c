@@ -556,6 +556,7 @@ struct dwc3_msm {
 	bool			dual_port;
 
 	bool			perf_mode;
+	bool			usb_data_enabled;
 #ifdef CONFIG_USB_NOTIFIER
 	bool restarting_host_mode;
 #endif
@@ -4437,6 +4438,25 @@ static inline const char *usb_role_string(enum usb_role role)
 	return "Invalid";
 }
 
+static bool dwc3_msm_role_allowed(struct dwc3_msm *mdwc, enum usb_role role)
+{
+	struct dwc3 *dwc = platform_get_drvdata(mdwc->dwc3);
+	dev_dbg(mdwc->dev, "%s: dr_mode=%d role_requested=%s\n",
+		__func__, (int) dwc->dr_mode,
+		usb_role_string(role));
+
+	if (role == USB_ROLE_HOST && dwc->dr_mode == USB_DR_MODE_PERIPHERAL)
+		return false;
+
+	if (role == USB_ROLE_DEVICE && dwc->dr_mode == USB_DR_MODE_HOST)
+		return false;
+
+	if (!mdwc->usb_data_enabled && role != USB_ROLE_NONE)
+		return false;
+
+	return true;
+}
+
 static enum usb_role dwc3_msm_usb_get_role(struct device *dev)
 {
 	struct dwc3_msm *mdwc = dev_get_drvdata(dev);
@@ -4459,6 +4479,9 @@ static int dwc3_msm_usb_set_role(struct device *dev, enum usb_role role)
 	struct dwc3_msm *mdwc = dev_get_drvdata(dev);
 	struct dwc3 *dwc = platform_get_drvdata(mdwc->dwc3);
 	enum usb_role cur_role = USB_ROLE_NONE;
+
+	if (!dwc3_msm_role_allowed(mdwc, role))
+		return -EINVAL;
 
 	cur_role = dwc3_msm_usb_get_role(dev);
 
@@ -4558,14 +4581,10 @@ static ssize_t mode_store(struct device *dev, struct device_attribute *attr,
 		const char *buf, size_t count)
 {
 	struct dwc3_msm *mdwc = dev_get_drvdata(dev);
-	struct dwc3 *dwc = platform_get_drvdata(mdwc->dwc3);
 
 	if (sysfs_streq(buf, "peripheral")) {
-		if (dwc->dr_mode == USB_DR_MODE_HOST) {
-			dev_err(dev, "Core supports host mode only.\n");
+		if (!dwc3_msm_role_allowed(mdwc, USB_ROLE_DEVICE))
 			return -EINVAL;
-		}
-
 #ifdef CONFIG_USB_NOTIFIER
 		if (is_blocked(get_otg_notify(), NOTIFY_BLOCK_TYPE_CLIENT)) {
 			dev_err(dev, "blocked peripheral mode\n");
@@ -4942,6 +4961,33 @@ struct usb_ops ops_usb = {
 #endif
 };
 #endif
+static ssize_t usb_data_enabled_show(struct device *dev,
+				     struct device_attribute *attr, char *buf)
+{
+	struct dwc3_msm *mdwc = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%s\n",
+			  mdwc->usb_data_enabled ? "enabled" : "disabled");
+}
+
+static ssize_t usb_data_enabled_store(struct device *dev,
+				      struct device_attribute *attr,
+				      const char *buf, size_t count)
+{
+	struct dwc3_msm *mdwc = dev_get_drvdata(dev);
+	bool enabled;
+
+	if (kstrtobool(buf, &enabled))
+		return -EINVAL;
+
+	mdwc->usb_data_enabled = enabled;
+	if (!enabled)
+		dwc3_msm_usb_set_role(dev, USB_ROLE_NONE);
+
+	return count;
+}
+static DEVICE_ATTR_RW(usb_data_enabled);
+
 static int dwc3_msm_probe(struct platform_device *pdev)
 {
 	struct device_node *node = pdev->dev.of_node, *dwc3_node;
@@ -5294,6 +5340,9 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 
 	mdwc->ss_redriver_node = of_parse_phandle(node, "ssusb_redriver", 0);
 
+	/* set the initial value */
+	mdwc->usb_data_enabled = true;
+
 	if (of_property_read_bool(node, "usb-role-switch")) {
 		role_desc.fwnode = dev_fwnode(&pdev->dev);
 		mdwc->role_switch = usb_role_switch_register(mdwc->dev,
@@ -5394,7 +5443,8 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 	device_create_file(&pdev->dev, &dev_attr_mode);
 	device_create_file(&pdev->dev, &dev_attr_speed);
 	device_create_file(&pdev->dev, &dev_attr_bus_vote);
-	
+	device_create_file(&pdev->dev, &dev_attr_usb_data_enabled);	
+
 	mdwc->dwc3_msm_probe_done = 1;
 	mdwc->dwc3_msm_current_speed_mode = USB_SPEED_UNKNOWN;
 
@@ -5438,6 +5488,7 @@ static int dwc3_msm_remove(struct platform_device *pdev)
 	device_remove_file(&pdev->dev, &dev_attr_mode);
 	device_remove_file(&pdev->dev, &dev_attr_speed);
 	device_remove_file(&pdev->dev, &dev_attr_bus_vote);
+	device_remove_file(&pdev->dev, &dev_attr_usb_data_enabled);
 
 	if (mdwc->dpdm_nb.notifier_call) {
 		regulator_unregister_notifier(mdwc->dpdm_reg, &mdwc->dpdm_nb);

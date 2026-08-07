@@ -80,7 +80,7 @@ void notrace __hot ftrace_function_trampoline(unsigned long parent,
 #endif
 }
 
-#ifdef CONFIG_FUNCTION_GRAPH_TRACER
+#if defined(CONFIG_DYNAMIC_FTRACE) && defined(CONFIG_FUNCTION_GRAPH_TRACER)
 int ftrace_enable_ftrace_graph_caller(void)
 {
 	return 0;
@@ -172,7 +172,7 @@ int ftrace_make_call(struct dyn_ftrace *rec, unsigned long addr)
 
 	ip = (void *)(rec->ip + 4 - size);
 
-	ret = probe_kernel_read(insn, ip, size);
+	ret = copy_from_kernel_nofault(insn, ip, size);
 	if (ret)
 		return ret;
 

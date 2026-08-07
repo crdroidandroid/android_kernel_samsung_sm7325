@@ -807,8 +807,10 @@ static const struct soc_id soc_id[] = {
 	{ 450, "SHIMA" },
 	{ 454, "HOLI" },
 	{ 507, "BLAIR" },
+	{ 578, "BLAIR-LITE" },
 	{ 565, "BLAIRP" },
 	{ 628, "BLAIRP-XR" },
+	{ 647, "BLAIRP-LTE" },
 	{ 486, "MONACO" },
 	{ 458, "SDXLEMUR" },
 	{ 483, "SDXLEMUR-SD"},
@@ -1422,6 +1424,9 @@ static int qcom_socinfo_probe(struct platform_device *pdev)
 					   SOCINFO_MAJOR(le32_to_cpu(info->ver)),
 					   SOCINFO_MINOR(le32_to_cpu(info->ver)));
 	qs->attr.soc_id = kasprintf(GFP_KERNEL, "%d", socinfo_get_id());
+
+	if (!qs->attr.soc_id || !qs->attr.revision)
+		return -ENOMEM;
 
 	if (socinfo_format >= SOCINFO_VERSION(0, 16)) {
 		machine = socinfo_machine(le32_to_cpu(info->id));

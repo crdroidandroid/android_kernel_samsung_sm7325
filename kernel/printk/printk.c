@@ -186,7 +186,7 @@ __setup("printk.devkmsg=", control_devkmsg);
 char devkmsg_log_str[DEVKMSG_STR_MAX_SIZE] = "ratelimit";
 
 int devkmsg_sysctl_set_loglvl(struct ctl_table *table, int write,
-			      void __user *buffer, size_t *lenp, loff_t *ppos)
+			      void *buffer, size_t *lenp, loff_t *ppos)
 {
 	char old_str[DEVKMSG_STR_MAX_SIZE];
 	unsigned int old;
@@ -523,7 +523,7 @@ static u32 clear_idx_knox;
 /* record buffer */
 #define LOG_ALIGN __alignof__(struct printk_log)
 #define __LOG_BUF_LEN (1 << CONFIG_LOG_BUF_SHIFT)
-#define LOG_BUF_LEN_MAX (u32)(1 << 31)
+#define LOG_BUF_LEN_MAX ((u32)1 << 31)
 static char __log_buf[__LOG_BUF_LEN] __aligned(LOG_ALIGN);
 static char *log_buf = __log_buf;
 static u32 log_buf_len = __LOG_BUF_LEN;
@@ -1987,6 +1987,12 @@ static int console_trylock_spinning(void)
 	 */
 	mutex_acquire(&console_lock_dep_map, 0, 1, _THIS_IP_);
 
+	/*
+	 * Update @console_may_schedule for trylock because the previous
+	 * owner may have been schedulable.
+	 */
+	console_may_schedule = 0;
+
 	return 1;
 }
 
@@ -3208,7 +3214,7 @@ static void wake_up_klogd_work_func(struct irq_work *irq_work)
 
 static DEFINE_PER_CPU(struct irq_work, wake_up_klogd_work) = {
 	.func = wake_up_klogd_work_func,
-	.flags = IRQ_WORK_LAZY,
+	.flags = ATOMIC_INIT(IRQ_WORK_LAZY),
 };
 
 void wake_up_klogd(void)

@@ -27,7 +27,6 @@
 #include <linux/backing-dev.h>
 #include <linux/string.h>
 #include <linux/msg.h>
-#include <linux/task_integrity.h>
 #include <net/flow.h>
 
 #define MAX_LSM_EVM_XATTR	2
@@ -638,6 +637,25 @@ static void __init lsm_early_task(struct task_struct *task)
 }
 
 /*
+ * The default value of the LSM hook is defined in linux/lsm_hook_defs.h and
+ * can be accessed with:
+ *
+ *	LSM_RET_DEFAULT(<hook_name>)
+ *
+ * The macros below define static constants for the default value of each
+ * LSM hook.
+ */
+#define LSM_RET_DEFAULT(NAME) (NAME##_default)
+#define DECLARE_LSM_RET_DEFAULT_void(DEFAULT, NAME)
+#define DECLARE_LSM_RET_DEFAULT_int(DEFAULT, NAME) \
+	static const int LSM_RET_DEFAULT(NAME) = (DEFAULT);
+#define LSM_HOOK(RET, DEFAULT, NAME, ...) \
+	DECLARE_LSM_RET_DEFAULT_##RET(DEFAULT, NAME)
+
+#include <linux/lsm_hook_defs.h>
+#undef LSM_HOOK
+
+/*
  * Hook list operation macros.
  *
  * call_void_hook:
@@ -647,17 +665,10 @@ static void __init lsm_early_task(struct task_struct *task)
  *	This is a hook that returns a value.
  */
 
-/*
- * security_integrity_current() is added,
- * which has a dependency of CONFIG_KDP_CRED.
- * security_integrity_current is added to check integrity of credential context.
- * if CONFIG_KDP_CRED is disabled, it will always return 0.
- */
 #define call_void_hook(FUNC, ...)				\
 	do {							\
 		struct security_hook_list *P;			\
 								\
-		if(security_integrity_current()) break;		\
 		hlist_for_each_entry(P, &security_hook_heads.FUNC, list) \
 			P->hook.FUNC(__VA_ARGS__);		\
 	} while (0)
@@ -667,9 +678,6 @@ static void __init lsm_early_task(struct task_struct *task)
 	do {							\
 		struct security_hook_list *P;			\
 								\
-		RC = security_integrity_current();		\
-		if (RC != 0)					\
-			break;					\
 		hlist_for_each_entry(P, &security_hook_heads.FUNC, list) { \
 			RC = P->hook.FUNC(__VA_ARGS__);		\
 			if (RC != 0)				\
@@ -793,9 +801,6 @@ int security_bprm_check(struct linux_binprm *bprm)
 	int ret;
 
 	ret = call_int_hook(bprm_check_security, 0, bprm);
-	if (ret)
-		return ret;
-	ret = five_bprm_check(bprm);
 	if (ret)
 		return ret;
 	return ima_bprm_check(bprm);
@@ -1027,6 +1032,14 @@ out:
 	return (ret == -EOPNOTSUPP) ? 0 : ret;
 }
 EXPORT_SYMBOL(security_inode_init_security);
+
+int security_inode_init_security_anon(struct inode *inode,
+				      const struct qstr *name,
+				      const struct inode *context_inode)
+{
+	return call_int_hook(inode_init_security_anon, 0, inode, name,
+			     context_inode);
+}
 
 int security_old_inode_init_security(struct inode *inode, struct inode *dir,
 				     const struct qstr *qstr, const char **name,
@@ -1267,9 +1280,6 @@ int security_inode_setxattr(struct dentry *dentry, const char *name,
 		ret = cap_inode_setxattr(dentry, name, value, size, flags);
 	if (ret)
 		return ret;
-	ret = five_inode_setxattr(dentry, name, value, size);
-	if (ret)
-		return ret;
 	ret = ima_inode_setxattr(dentry, name, value, size);
 	if (ret)
 		return ret;
@@ -1314,9 +1324,6 @@ int security_inode_removexattr(struct dentry *dentry, const char *name)
 		ret = cap_inode_removexattr(dentry, name);
 	if (ret)
 		return ret;
-	ret = five_inode_removexattr(dentry, name);
-	if (ret)
-		return ret;
 	ret = ima_inode_removexattr(dentry, name);
 	if (ret)
 		return ret;
@@ -1339,16 +1346,16 @@ int security_inode_getsecurity(struct inode *inode, const char *name, void **buf
 	int rc;
 
 	if (unlikely(IS_PRIVATE(inode)))
-		return -EOPNOTSUPP;
+		return LSM_RET_DEFAULT(inode_getsecurity);
 	/*
 	 * Only one module will provide an attribute with a given name.
 	 */
 	hlist_for_each_entry(hp, &security_hook_heads.inode_getsecurity, list) {
 		rc = hp->hook.inode_getsecurity(inode, name, buffer, alloc);
-		if (rc != -EOPNOTSUPP)
+		if (rc != LSM_RET_DEFAULT(inode_getsecurity))
 			return rc;
 	}
-	return -EOPNOTSUPP;
+	return LSM_RET_DEFAULT(inode_getsecurity);
 }
 
 int security_inode_setsecurity(struct inode *inode, const char *name, const void *value, size_t size, int flags)
@@ -1357,17 +1364,17 @@ int security_inode_setsecurity(struct inode *inode, const char *name, const void
 	int rc;
 
 	if (unlikely(IS_PRIVATE(inode)))
-		return -EOPNOTSUPP;
+		return LSM_RET_DEFAULT(inode_setsecurity);
 	/*
 	 * Only one module will provide an attribute with a given name.
 	 */
 	hlist_for_each_entry(hp, &security_hook_heads.inode_setsecurity, list) {
 		rc = hp->hook.inode_setsecurity(inode, name, value, size,
 								flags);
-		if (rc != -EOPNOTSUPP)
+		if (rc != LSM_RET_DEFAULT(inode_setsecurity))
 			return rc;
 	}
-	return -EOPNOTSUPP;
+	return LSM_RET_DEFAULT(inode_setsecurity);
 }
 
 int security_inode_listsecurity(struct inode *inode, char *buffer, size_t buffer_size)
@@ -1442,6 +1449,23 @@ int security_file_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	return call_int_hook(file_ioctl, 0, file, cmd, arg);
 }
 
+/**
+ * security_file_ioctl_compat() - Check if an ioctl is allowed in compat mode
+ * @file: associated file
+ * @cmd: ioctl cmd
+ * @arg: ioctl arguments
+ *
+ * Compat version of security_file_ioctl() that correctly handles 32-bit
+ * processes running on 64-bit kernels.
+ *
+ * Return: Returns 0 if permission is granted.
+ */
+int security_file_ioctl_compat(struct file *file, unsigned int cmd,
+			       unsigned long arg)
+{
+	return call_int_hook(file_ioctl_compat, 0, file, cmd, arg);
+}
+
 static inline unsigned long mmap_prot(struct file *file, unsigned long prot)
 {
 	/*
@@ -1482,10 +1506,6 @@ int security_mmap_file(struct file *file, unsigned long prot,
 	int ret;
 
 	ret = call_int_hook(mmap_file, 0, file, prot, prot_adj, flags);
-	if (ret)
-		return ret;
-
-	ret = five_file_mmap(file, prot);
 	if (ret)
 		return ret;
 	return ima_file_mmap(file, prot, prot_adj, flags);
@@ -1536,11 +1556,7 @@ int security_file_open(struct file *file)
 	if (ret)
 		return ret;
 
-	ret = fsnotify_perm(file, MAY_OPEN);
-	if (ret)
-		return ret;
-
-	return five_file_open(file);
+	return fsnotify_perm(file, MAY_OPEN);
 }
 
 int security_task_alloc(struct task_struct *task, unsigned long clone_flags)
@@ -1558,7 +1574,6 @@ int security_task_alloc(struct task_struct *task, unsigned long clone_flags)
 void security_task_free(struct task_struct *task)
 {
 	call_void_hook(task_free, task);
-	five_task_free(task);
 
 	kfree(task->security);
 	task->security = NULL;
@@ -1588,13 +1603,6 @@ void security_cred_free(struct cred *cred)
 
 	call_void_hook(cred_free, cred);
 
-#ifdef CONFIG_KDP_CRED
-	if (is_kdp_protect_addr((unsigned long)cred)) {
-		kdp_free_security((unsigned long)cred->security);
-		uh_call(UH_APP_KDP, SELINUX_CRED_FREE, (u64) &cred->security, 0, 0, 0);
-		return;
-	}
-#endif
 	kfree(cred->security);
 	cred->security = NULL;
 }
@@ -1758,12 +1766,12 @@ int security_task_prctl(int option, unsigned long arg2, unsigned long arg3,
 			 unsigned long arg4, unsigned long arg5)
 {
 	int thisrc;
-	int rc = -ENOSYS;
+	int rc = LSM_RET_DEFAULT(task_prctl);
 	struct security_hook_list *hp;
 
 	hlist_for_each_entry(hp, &security_hook_heads.task_prctl, list) {
 		thisrc = hp->hook.task_prctl(option, arg2, arg3, arg4, arg5);
-		if (thisrc != -ENOSYS) {
+		if (thisrc != LSM_RET_DEFAULT(task_prctl)) {
 			rc = thisrc;
 			if (thisrc != 0)
 				break;
@@ -1935,7 +1943,7 @@ int security_getprocattr(struct task_struct *p, const char *lsm, char *name,
 			continue;
 		return hp->hook.getprocattr(p, name, value);
 	}
-	return -EINVAL;
+	return LSM_RET_DEFAULT(getprocattr);
 }
 
 int security_setprocattr(const char *lsm, const char *name, void *value,
@@ -1948,7 +1956,7 @@ int security_setprocattr(const char *lsm, const char *name, void *value,
 			continue;
 		return hp->hook.setprocattr(name, value, size);
 	}
-	return -EINVAL;
+	return LSM_RET_DEFAULT(setprocattr);
 }
 
 int security_netlink_send(struct sock *sk, struct sk_buff *skb)
@@ -2333,7 +2341,7 @@ int security_xfrm_state_pol_flow_match(struct xfrm_state *x,
 				       const struct flowi *fl)
 {
 	struct security_hook_list *hp;
-	int rc = 1;
+	int rc = LSM_RET_DEFAULT(xfrm_state_pol_flow_match);
 
 	/*
 	 * Since this function is expected to return 0 or 1, the judgment

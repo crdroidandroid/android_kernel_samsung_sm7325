@@ -64,6 +64,7 @@
 #include <linux/rcuwait.h>
 #include <linux/compat.h>
 #include <linux/sysfs.h>
+#include <linux/usermode_driver.h>
 
 #include <linux/uaccess.h>
 #include <asm/unistd.h>
@@ -114,14 +115,6 @@ static __init int kernel_exit_sysfs_init(void)
 	return 0;
 }
 late_initcall(kernel_exit_sysfs_init);
-#endif
-
-#ifdef CONFIG_SECURITY_DEFEX
-#include <linux/defex.h>
-#endif
-
-#if defined(CONFIG_MEMORY_ZEROISATION)
-#include <linux/mz.h> /* for Memory zeroisation */
 #endif
 
 static void __unhash_process(struct task_struct *p, bool group_dead)
@@ -281,6 +274,7 @@ repeat:
 	}
 
 	write_unlock_irq(&tasklist_lock);
+	seccomp_filter_release(p);
 	release_thread(p);
 	put_task_struct_rcu_user(p);
 
@@ -441,6 +435,8 @@ retry:
 	 * Search through everything else, we should not get here often.
 	 */
 	for_each_process(g) {
+		if (atomic_read(&mm->mm_users) <= 1)
+			break;
 		if (g->flags & PF_KTHREAD)
 			continue;
 		for_each_thread(g, c) {
@@ -543,11 +539,6 @@ static void exit_mm(void)
 	mmput(mm);
 	if (test_thread_flag(TIF_MEMDIE))
 		exit_oom_victim();
-
-	/* Memory zeroisation */
-#if defined(CONFIG_MEMORY_ZEROISATION)
-	mz_exit();
-#endif
 }
 
 static struct task_struct *find_alive_thread(struct task_struct *p)
@@ -783,10 +774,6 @@ void __noreturn do_exit(long code)
 	 * Then do everything else.
 	 */
 
-#ifdef CONFIG_SECURITY_DEFEX
-	task_defex_zero_creds(current);
-#endif
-
 	WARN_ON(blk_needs_flush_plug(tsk));
 
 	if (unlikely(in_interrupt()))
@@ -859,6 +846,15 @@ void __noreturn do_exit(long code)
 	tsk->exit_code = code;
 	taskstats_exit(tsk, group_dead);
 
+	/*
+	 * Since sampling can touch ->mm, make sure to stop everything before we
+	 * tear it down.
+	 *
+	 * Also flushes inherited counters to the parent - before the parent
+	 * gets woken up by child-exit notifications.
+	 */
+	perf_event_exit_task(tsk);
+
 	exit_mm();
 
 	if (group_dead)
@@ -874,15 +870,8 @@ void __noreturn do_exit(long code)
 	exit_task_namespaces(tsk);
 	exit_task_work(tsk);
 	exit_thread(tsk);
-	exit_umh(tsk);
-
-	/*
-	 * Flush inherited counters to the parent - before the parent
-	 * gets woken up by child-exit notifications.
-	 *
-	 * because of cgroup mode, must be called before cgroup_exit()
-	 */
-	perf_event_exit_task(tsk);
+	if (group_dead)
+		exit_umh(tsk);
 
 	sched_autogroup_exit_task(tsk);
 	cgroup_exit(tsk);
@@ -1788,6 +1777,30 @@ Efault:
 	return -EFAULT;
 }
 #endif
+
+/**
+ * thread_group_exited - check that a thread group has exited
+ * @pid: tgid of thread group to be checked.
+ *
+ * Test if the thread group represented by tgid has exited (all
+ * threads are zombies, dead or completely gone).
+ *
+ * Return: true if the thread group has exited. false otherwise.
+ */
+bool thread_group_exited(struct pid *pid)
+{
+	struct task_struct *task;
+	bool exited;
+
+	rcu_read_lock();
+	task = pid_task(pid, PIDTYPE_PID);
+	exited = !task ||
+		(READ_ONCE(task->exit_state) && thread_group_empty(task));
+	rcu_read_unlock();
+
+	return exited;
+}
+EXPORT_SYMBOL(thread_group_exited);
 
 __weak void abort(void)
 {

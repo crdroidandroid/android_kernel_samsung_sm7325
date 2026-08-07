@@ -942,7 +942,12 @@ static void do_test_single(struct bpf_test *test, bool unpriv,
 	attr.insns = prog;
 	attr.insns_cnt = prog_len;
 	attr.license = "GPL";
-	attr.log_level = verbose || expected_ret == VERBOSE_ACCEPT ? 1 : 4;
+	if (verbose)
+		attr.log_level = 1;
+	else if (expected_ret == VERBOSE_ACCEPT)
+		attr.log_level = 2;
+	else
+		attr.log_level = 4;
 	attr.prog_flags = pflags;
 
 	fd_prog = bpf_load_program_xattr(&attr, bpf_vlog, sizeof(bpf_vlog));
@@ -1091,6 +1096,19 @@ static void get_unpriv_disabled()
 
 static bool test_as_unpriv(struct bpf_test *test)
 {
+#ifndef CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS
+	/* Some architectures have strict alignment requirements. In
+	 * that case, the BPF verifier detects if a program has
+	 * unaligned accesses and rejects them. A user can pass
+	 * BPF_F_ANY_ALIGNMENT to a program to override this
+	 * check. That, however, will only work when a privileged user
+	 * loads a program. An unprivileged user loading a program
+	 * with this flag will be rejected prior entering the
+	 * verifier.
+	 */
+	if (test->flags & F_NEEDS_EFFICIENT_UNALIGNED_ACCESS)
+		return false;
+#endif
 	return !test->prog_type ||
 	       test->prog_type == BPF_PROG_TYPE_SOCKET_FILTER ||
 	       test->prog_type == BPF_PROG_TYPE_CGROUP_SKB;

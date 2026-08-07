@@ -355,7 +355,14 @@ unsigned long zone_reclaimable_pages(struct zone *zone)
 	if (get_nr_swap_pages() > 0)
 		nr += zone_page_state_snapshot(zone, NR_ZONE_INACTIVE_ANON) +
 			zone_page_state_snapshot(zone, NR_ZONE_ACTIVE_ANON);
-
+	/*
+	 * If there are no reclaimable file-backed or anonymous pages,
+	 * ensure zones with sufficient free pages are not skipped.
+	 * This prevents zones like DMA32 from being ignored in reclaim
+	 * scenarios where they can still help alleviate memory pressure.
+	 */
+	if (nr == 0)
+		nr = zone_page_state_snapshot(zone, NR_FREE_PAGES);
 	return nr;
 }
 
@@ -2470,7 +2477,7 @@ int am_app_launch_notifier_register(struct notifier_block *nb)
 
 int am_app_launch_notifier_unregister(struct notifier_block *nb)
 {
-	return  atomic_notifier_chain_unregister(&am_app_launch_notifier, nb);
+	return atomic_notifier_chain_unregister(&am_app_launch_notifier, nb);
 }
 
 static ssize_t am_app_launch_show(struct kobject *kobj,
@@ -3005,7 +3012,7 @@ static void shrink_node_memcg(struct pglist_data *pgdat, struct mem_cgroup *memc
 /* Use reclaim/compaction for costly allocs or under memory pressure */
 static bool in_reclaim_compaction(struct scan_control *sc)
 {
-	if (IS_ENABLED(CONFIG_COMPACTION) && sc->order &&
+	if (gfp_compaction_allowed(sc->gfp_mask) && sc->order &&
 			(sc->order > PAGE_ALLOC_COSTLY_ORDER ||
 			 sc->priority < DEF_PRIORITY - 2))
 		return true;
@@ -3253,6 +3260,9 @@ static inline bool compaction_ready(struct zone *zone, struct scan_control *sc)
 {
 	unsigned long watermark;
 	enum compact_result suitable;
+
+	if (!gfp_compaction_allowed(sc->gfp_mask))
+		return false;
 
 	suitable = compaction_suitable(zone, sc->order, 0, sc->reclaim_idx);
 	if (suitable == COMPACT_SUCCESS)
@@ -4220,6 +4230,20 @@ static void kswapd_try_to_sleep(pg_data_t *pgdat, int alloc_order, int reclaim_o
 	finish_wait(&pgdat->kswapd_wait, &wait);
 }
 
+#if CONFIG_KSWAPD_CPU
+static struct cpumask kswapd_cpumask;
+static void init_kswapd_cpumask(void)
+{
+	int i;
+
+	cpumask_clear(&kswapd_cpumask);
+	for (i = 0; i < nr_cpu_ids; i++) {
+		if (CONFIG_KSWAPD_CPU & (1 << i))
+			cpumask_set_cpu(i, &kswapd_cpumask);
+	}
+}
+#endif
+
 /*
  * The background pageout daemon, started as a kernel thread
  * from the init process.
@@ -4239,7 +4263,11 @@ static int kswapd(void *p)
 	unsigned int classzone_idx = MAX_NR_ZONES - 1;
 	pg_data_t *pgdat = (pg_data_t*)p;
 	struct task_struct *tsk = current;
+#if CONFIG_KSWAPD_CPU
+	const struct cpumask *cpumask = &kswapd_cpumask;
+#else
 	const struct cpumask *cpumask = cpumask_of_node(pgdat->node_id);
+#endif
 
 	if (!cpumask_empty(cpumask))
 		set_cpus_allowed_ptr(tsk, cpumask);
@@ -4521,7 +4549,11 @@ static int kswapd_cpu_online(unsigned int cpu)
 		pg_data_t *pgdat = NODE_DATA(nid);
 		const struct cpumask *mask;
 
+#if CONFIG_KSWAPD_CPU
+		mask = &kswapd_cpumask;
+#else
 		mask = cpumask_of_node(pgdat->node_id);
+#endif
 
 		if (cpumask_any_and(cpu_online_mask, mask) < nr_cpu_ids) {
 			/* One of our CPUs online: restore mask */
@@ -4578,6 +4610,9 @@ static int __init kswapd_init(void)
 {
 	int nid, ret;
 
+#if CONFIG_KSWAPD_CPU
+	init_kswapd_cpumask();
+#endif
 	swap_setup();
 	for_each_node_state(nid, N_MEMORY)
  		kswapd_run(nid);
@@ -4760,7 +4795,7 @@ int node_reclaim(struct pglist_data *pgdat, gfp_t gfp_mask, unsigned int order)
 		return NODE_RECLAIM_NOSCAN;
 
 	ret = __node_reclaim(pgdat, gfp_mask, order);
-	clear_bit(PGDAT_RECLAIM_LOCKED, &pgdat->flags);
+	clear_bit_unlock(PGDAT_RECLAIM_LOCKED, &pgdat->flags);
 
 	if (!ret)
 		count_vm_event(PGSCAN_ZONE_RECLAIM_FAILED);

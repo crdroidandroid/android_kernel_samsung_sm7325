@@ -295,7 +295,7 @@ static int check_client(int client_id, int proc, int request)
 	int i = 0, rc;
 	int found = DHMS_MEM_CLIENT_INVALID;
 
-	for (i = 0; i < MAX_CLIENTS; i++) {
+	for (i = 0; i < num_clients; i++) {
 		if (memblock[i].client_id == client_id &&
 				memblock[i].peripheral == proc) {
 			found = i;
@@ -690,17 +690,7 @@ static void handle_alloc_generic_req(struct qmi_handle *handle,
 		return;
 	}
 
-	for (i = 0; i < MAX_CLIENTS; i++) {
-		if (memsh_child[i] == NULL) {
-			dev_err(memsh_drv->dev,
-				"memshare_alloc: client not found, requested client: %d, proc_id: %d\n",
-				alloc_req->client_id, alloc_req->proc_id);
-			kfree(alloc_resp);
-			alloc_resp = NULL;
-			mutex_unlock(&memsh_drv->mem_share);
-			return;
-		}
-
+	for (i = 0; i < num_clients; i++) {
 		if (memsh_child[i]->client_id == alloc_req->client_id) {
 			client_node = memsh_child[i];
 			dev_info(memsh_drv->dev,
@@ -820,7 +810,7 @@ static void handle_free_generic_req(struct qmi_handle *handle,
 		flag = 1;
 	}
 
-	for (i = 0; i < MAX_CLIENTS; i++) {
+	for (i = 0; i < num_clients; i++) {
 		if (memsh_child[i]->client_id == free_req->client_id) {
 			client_node = memsh_child[i];
 			dev_info(memsh_drv->dev,
